@@ -31,6 +31,7 @@ From these definitions, an **Execution Graph** is implicitly derived. It is a di
 | KeyValuePair        | A key-value pair used for environment variables or configuration.                          |
 | Execution Graph     | An implicitly derived DAG specifying the execution order of Model Adapters and Transformations. |
 | Orchestration       | The automated scheduling and execution of transformations in the correct order.            |
+| Task | A generic term for an execution step, which may refer to either a Model Adapter or a Transformation. |
 
 
 ## 3. Requirements
