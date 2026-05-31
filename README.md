@@ -16,7 +16,11 @@ In the ontology, each Transformation can define its input and output MicroModels
 
 The model also includes TaskDefinitions, which configure the concrete execution of tasks by specifying the Docker image, command sequence, parameters, and environment variables. TaskDefinitions define how models are loaded and stored (generally referred to as Model Adapters) and how transformations are executed.
 
-From these definitions, an **Execution Graph** is implicitly derived. It is a directed acyclic graph (DAG) that determines the order in which Model Adapters and Transformations are executed and serves as the input to the execution environment.
+From these definitions, an **Execution Graph** is implicitly derived. It is a directed acyclic graph (DAG) of TaskDefinitions that determines the order in which Model Adapters and Transformations are executed and serves as the input to the execution environment.
+
+The architecture follows a strict separation of concerns:
+- **Descriptive Layer:** The RDF/OWL process model and ontology definitions.
+- **Execution Layer:** The execution environment that interprets the model and performs orchestration of containerized tasks.
 
 
 ## 2. Terms and Definitions
@@ -29,9 +33,11 @@ From these definitions, an **Execution Graph** is implicitly derived. It is a di
 | ContainerProperties | Properties of a container, such as image, command sequence, and environment.               |
 | Environment         | An environment for executing containers, defined as a set of key-value pairs.              |
 | KeyValuePair        | A key-value pair used for environment variables or configuration.                          |
-| Execution Graph     | An implicitly derived DAG specifying the execution order of Model Adapters and Transformations. |
-| Orchestration       | The automated scheduling and execution of transformations in the correct order.            |
+| Execution Graph     | An implicitly derived DAG of TaskDefinitions specifying the execution order of Model Adapters and Transformations. |
+| Orchestration       | The automated scheduling and execution of tasks in the correct order.            |
 | Task | A generic term for an execution step, which may refer to either a Model Adapter or a Transformation. |
+| Descriptive Layer   | The model layer containing process definitions in RDF/OWL (MicroModels, Transformations, TaskDefinitions, relations, and constraints). |
+| Execution Layer     | The execution layer that interprets the descriptive layer and executes tasks in dependency-consistent order. |
 
 
 ## 3. Requirements
@@ -39,11 +45,11 @@ From these definitions, an **Execution Graph** is implicitly derived. It is a di
 ### 3.1 Functional Requirements
 
 - **FREQ-1:** The system **must** accept a model as input, described using the MicroModel and Transformation Ontology (including MicroModels, Transformations, TaskDefinitions, ContainerProperties, and Environment).
-- **FREQ-2:** The system **must** derive a topological order of Transformations from the Execution Graph defined in the model.
-- **FREQ-3:** Each Transformation **must** be executed in an isolated runtime environment (Docker container) as specified by its TaskDefinition and ContainerProperties.
-- **FREQ-4:** Transformations **must** consume input MicroModels and produce output MicroModels as defined in the ontology.
-- **FREQ-5:** The system **must** automatically orchestrate execution of all Transformations according to their dependencies in the Execution Graph.
-- **FREQ-6:** The system **should** track execution status of each Transformation (e.g., pending, running, succeeded, failed).
+- **FREQ-2:** The system **must** derive a dependency-consistent topological order of TaskDefinitions from the Execution Graph defined in the model.
+- **FREQ-3:** Each Task **must** be executed in an isolated execution environment (Docker container) as specified by its TaskDefinition and ContainerProperties.
+- **FREQ-4:** The system **must** automatically orchestrate execution of all tasks according to their dependencies in the Execution Graph.
+- **FREQ-5:** The system **should** track execution status of each Task (e.g., pending, running, succeeded, failed).
+
 
 
 ### 3.2 Non-functional Requirements
@@ -51,6 +57,10 @@ From these definitions, an **Execution Graph** is implicitly derived. It is a di
 - **NFREQ-1: Portable and Environment-Independent Execution** Transformations and MicroModel Adapters **must** run in any Docker-supported environment without depending on specific infrastructure or orchestration technology. 
 
 - **NFREQ-2: Extensibility** New MicroModels or Transformations **should** be addable via the ontology without modifying the core orchestration logic.
+
+- **NFREQ-3: Reproducibility and Determinism** Execution **must** be reproducible under identical inputs by using explicit, immutable references for models and implementations (e.g., model revisions and container image digests). Under identical conditions, execution results **must** be deterministic.
+
+- **NFREQ-4: Layer Separation** The descriptive layer and execution layer **must** remain strictly separated, so model evolution does not require changes to orchestration logic beyond interpretation of the model.
 
 
 ## 4. Interfaces
@@ -63,8 +73,9 @@ The model description is provided as an RDF graph using the MicroModel and Trans
 - TaskDefinitions, each referencing:
 	- ContainerProperties (specifying the Docker image, command sequence, and environment)
 	- Environment (a set of KeyValuePairs for environment variables)
-- The Execution Graph (DAG) describing dependencies between Transformations
+- The Execution Graph (DAG) of TaskDefinitions describing dependencies between executable tasks
 - Configuration for orchestration and container execution
+- SHACL constraints (or equivalent validation artifacts) to ensure model well-formedness before execution
 
 
 **Example (Turtle excerpt):**
@@ -92,7 +103,7 @@ ex:kv2 a mmut:KeyValuePair ; mmut:key "GLOBAL_CONFIG" ; mmut:value "/config/glob
 Each MicroModel Adapter and each Transformation is executed as a Docker container according to its TaskDefinition and associated ContainerProperties and Environment.
 
 **Execution:**
-- The orchestrator starts the container and passes the command sequence as specified in the model (mmut:hasCommandSequence).
+- The execution environment starts the container and passes the command sequence as specified in the model (mmut:hasCommandSequence).
 - Environment variables are set as specified by the Environment (mmut:hasEnvironment, mmut:KeyValuePair).
 - A shared directory (e.g., `/shared/models`) is mounted into the container, providing access to MicroModels and configuration files.
 
@@ -113,7 +124,8 @@ Inputs and outputs are exchanged via the shared model mount. Configuration and s
 
 1. **Graph Analysis:**
 	- The system parses the model description.
-	- A topological ordering of tasks (model adapters and transformations) is computed.
+	- Model well-formedness is validated (including SHACL constraints and acyclicity checks).
+	- A topological ordering of TaskDefinitions (model adapters and transformations) is computed.
 
 2. **Execution:**
 	- Tasks without unmet dependencies are launched.
@@ -125,9 +137,10 @@ Inputs and outputs are exchanged via the shared model mount. Configuration and s
 	- Outputs are produced as MicroModels by Transformations.
 
 4. **Orchestration:**
-	- The orchestrator schedules and monitors tasks.
+	- The execution environment schedules and monitors tasks.
 	- Failures are detected and marked in the execution status.
 	- Dependent tasks are executed only if all predecessors succeed.
+	- Tasks with no unmet dependencies may execute in parallel.
 
 
 **Example execution flow:**
@@ -144,13 +157,15 @@ Inputs and outputs are exchanged via the shared model mount. Configuration and s
 
 - **Invalid execution graph:** Cycles or other invalid structures in the Execution Graph are detected during model loading. If detected, execution is rejected entirely, and no tasks are started.
 
+- **Invalid model constraints:** Missing required semantic relations (e.g., missing input/output links) or SHACL constraint violations are detected during validation. If detected, execution is rejected entirely, and no tasks are started.
+
 
 ## 7. Conformance Criteria
 
 An implementation is conformant if it:
 
 - **CC-1:** Executes tasks in the correct order derived from the graph.
-- **CC-2:** Runs each tasks in a Docker container.
+- **CC-2:** Runs each task in a Docker container.
 - **CC-3:** Uses TaskDefinitions and ContainerProperties as specified in the ontology for executing Transformations and MicroModel adapters.
 - **CC-4:** Automates orchestration of the execution.
 - **CC-5:** Tracks and reports execution status correctly.
@@ -158,18 +173,16 @@ An implementation is conformant if it:
 
 ## 8. Security Aspects
 
-- Secrets required for execution (such as API keys or credentials) are not included directly in the model. Instead, the model specifies a key or identifier for each secret.
-- At runtime, the orchestrator uses these keys to retrieve the actual secret values from a SecretStore (e.g., HashiCorp Vault, AWS Secrets Manager, Kubernetes Secrets).
-- The resolved secrets are injected into the container environment as environment variables before execution.
+- Secrets required for execution (such as API keys or credentials) are not included directly in the model. Instead, the model specifies only references or identifiers.
+- At runtime, secret values are resolved by the execution environment through a secure secret-management mechanism.
+- Resolved secrets are injected only for the lifetime and scope needed for task execution.
 
 ## 9. Non-normative Notes
 
 - Orchestration systems may include Prefect, GitLab pipelines, or any DAG-capable workflow engine.
 - Performance optimizations (e.g., parallel execution) are permitted as long as dependency semantics are preserved.
 - Logging and monitoring are recommended but not mandatory.
-
-
-
+- Concrete secret-management products are implementation choices and are intentionally out of scope of this specification.
 
 ---
 
